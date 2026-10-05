@@ -134,7 +134,7 @@ git clone https://github.com/jiangdong17/omni.git ~/wg
 cd ~/wg
 
 # Option 2: offline tarball (copy the tar.gz to the target machine)
-tar -xzf omni-v1.2.0.tar.gz
+tar -xzf omni-v1.2.1.tar.gz
 mv omni-repo ~/wg && cd ~/wg
 
 chmod +x omni.sh
@@ -177,7 +177,7 @@ echo 'export PATH="$HOME/wg:$PATH"' >> ~/.zshrc && exec zsh
 Verify:
 
 ```sh
-omni --version      # → omni 1.2.0
+omni --version      # → omni 1.2.1
 ```
 
 ### 2.6 First self-check
@@ -682,14 +682,19 @@ MOUNTS = [
   ),
 ]
 
-DB_PATH       = "~/wg/omni.db"
-INVENTORY_DIR = "~/wg/inventory"
-REPORT_DIR    = "~/wg/reports"
-LOG_PATH      = "~/wg/.omni/omni.log"
-STATE_DIR     = "~/wg/.omni"
-WIKI_DIR      = "~/wg/wiki"
-WIKI_RAW      = "~/wg/wiki/raw"
-AGENTS_PATH   = "~/wg/AGENTS.md"
+# All paths below are DERIVED from OMNI_HOME (default ~/wg) — you do not need to edit
+# them when you move the root. Hardcode an absolute path to override a single entry.
+OMNI_HOME     = os.path.expanduser(os.environ.get("OMNI_HOME", "~/wg"))
+DB_PATH       = os.path.join(OMNI_HOME, "omni.db")
+INVENTORY_DIR = os.path.join(OMNI_HOME, "inventory")
+REPORT_DIR    = os.path.join(OMNI_HOME, "reports")
+LOG_PATH      = os.path.join(OMNI_HOME, ".omni", "omni.log")
+STATE_DIR     = os.path.join(OMNI_HOME, ".omni")
+WIKI_DIR      = os.path.join(OMNI_HOME, "wiki")
+WIKI_RAW      = os.path.join(OMNI_HOME, "wiki", "raw")
+AGENTS_PATH   = os.path.join(OMNI_HOME, "AGENTS.md")
+# MNT is deliberately independent of OMNI_HOME: the index lives in OMNI_HOME,
+# the mounted shares live under MNT.
 
 SCAN_HARD_LIMIT_S   = 600     # hard per-mount scan limit
 SCAN_MIN_INTERVAL_H = 6       # minimum interval between auto-scans

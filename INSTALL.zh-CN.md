@@ -133,7 +133,7 @@ git clone https://github.com/jiangdong17/omni.git ~/wg
 cd ~/wg
 
 # 方式二：离线包（把 tar.gz 拷到目标机）
-tar -xzf omni-v1.2.0.tar.gz
+tar -xzf omni-v1.2.1.tar.gz
 mv omni-repo ~/wg && cd ~/wg
 
 chmod +x omni.sh
@@ -175,7 +175,7 @@ echo 'export PATH="$HOME/wg:$PATH"' >> ~/.zshrc && exec zsh
 验证：
 
 ```sh
-omni --version      # → omni 1.2.0
+omni --version      # → omni 1.2.1
 ```
 
 ### 2.6 首次自检
@@ -678,14 +678,18 @@ MOUNTS = [
   ),
 ]
 
-DB_PATH       = "~/wg/omni.db"
-INVENTORY_DIR = "~/wg/inventory"
-REPORT_DIR    = "~/wg/reports"
-LOG_PATH      = "~/wg/.omni/omni.log"
-STATE_DIR     = "~/wg/.omni"
-WIKI_DIR      = "~/wg/wiki"
-WIKI_RAW      = "~/wg/wiki/raw"
-AGENTS_PATH   = "~/wg/AGENTS.md"
+# 下面这些路径全部由 OMNI_HOME 派生（默认 ~/wg）—— 换根目录时不用改这里。
+# 想单独把某一项指到别处，把它写死成绝对路径即可。
+OMNI_HOME     = os.path.expanduser(os.environ.get("OMNI_HOME", "~/wg"))
+DB_PATH       = os.path.join(OMNI_HOME, "omni.db")
+INVENTORY_DIR = os.path.join(OMNI_HOME, "inventory")
+REPORT_DIR    = os.path.join(OMNI_HOME, "reports")
+LOG_PATH      = os.path.join(OMNI_HOME, ".omni", "omni.log")
+STATE_DIR     = os.path.join(OMNI_HOME, ".omni")
+WIKI_DIR      = os.path.join(OMNI_HOME, "wiki")
+WIKI_RAW      = os.path.join(OMNI_HOME, "wiki", "raw")
+AGENTS_PATH   = os.path.join(OMNI_HOME, "AGENTS.md")
+# MNT 与 OMNI_HOME 相互独立：索引与报告放 OMNI_HOME，挂载的文件放 MNT。
 
 SCAN_HARD_LIMIT_S   = 600     # 单挂载点扫描硬上限
 SCAN_MIN_INTERVAL_H = 6       # 自动扫描最小间隔

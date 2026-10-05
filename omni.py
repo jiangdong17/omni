@@ -12,7 +12,7 @@ import argparse, hashlib, json, os, re, signal, socket, sqlite3, subprocess, sys
 import zipfile
 from fnmatch import fnmatch
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 WG = os.path.expanduser(os.environ.get("OMNI_HOME", "~/wg"))
 
 # ============================================================ i18n（多语言）
@@ -108,12 +108,35 @@ def T(s, *args):
 set_lang(os.environ.get("OMNI_LANG", ""))
 
 # ============================================================ 基础设施
+# 必需配置项：omnirc.py 里必须定义。缺项时给一句人话，而不是 AttributeError 堆栈。
+_REQUIRED_CFG = (
+    "MNT", "MOUNTS", "AUDIT",
+    "EXCLUDE_DIRS", "EXCLUDE_EXT", "EXCLUDE_NAME_PREFIX", "EXCLUDE_NAME_EXACT",
+    "CONTENT_EXT", "TEXT_PLAIN_EXT", "CONTENT_MAX_BYTES",
+    "CONTENT_KEEP_CHARS", "CONTENT_TIMEOUT_S", "SCAN_HARD_LIMIT_S",
+    "DB_PATH", "INVENTORY_DIR", "REPORT_DIR",
+)
+
 def load_cfg():
     import importlib.util
     p = os.path.join(WG, "omnirc.py")
+    if not os.path.isfile(p):
+        raise SystemExit(T(
+            "找不到配置文件：%s\n"
+            "提示：复制模板就能跑 —— cp %s/omnirc.py.example %s"
+        ) % (p, WG, p))
     spec = importlib.util.spec_from_file_location("omnirc", p)
     m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+    try:
+        spec.loader.exec_module(m)
+    except Exception as e:
+        raise SystemExit(T("配置文件执行失败：%s\n  %s: %s") % (p, type(e).__name__, e))
+    missing = [k for k in _REQUIRED_CFG if not hasattr(m, k)]
+    if missing:
+        raise SystemExit(T(
+            "配置文件缺少 %d 个必需项：%s\n"
+            "对照模板补齐：%s/omnirc.py.example"
+        ) % (len(missing), ", ".join(missing), WG))
     return m
 
 def log(msg):

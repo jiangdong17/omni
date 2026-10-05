@@ -192,6 +192,7 @@ before you change the code:
 ├── omni.sh            # launcher script
 ├── README.md          # this file
 ├── INSTALL.md         # ★ installation & multi-machine setup guide
+├── CHANGELOG.md       # release notes
 ├── omni.db            # SQLite index (the only data file)
 ├── inventory/         # L1 asset cards
 ├── reports/           # audit reports
@@ -206,4 +207,4 @@ before you change the code:
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Release notes: [CHANGELOG.md](CHANGELOG.md).

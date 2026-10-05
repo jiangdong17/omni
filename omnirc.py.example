@@ -7,6 +7,9 @@
 #   DB_PATH / INVENTORY_DIR / REPORT_DIR / STATE_DIR，以及 WIKI_RAW（仅新增副本）。
 # 源文件永远只读；清理建议只输出命令不代执行；破坏性命令（db rebuild）必须 --yes。
 
+# 挂载点根目录：所有网络共享挂到这里，每个共享一层 <MNT>/<label>。
+# 注意：MNT 与 OMNI_HOME 相互独立 —— OMNI_HOME 放索引与报告，MNT 放挂载的文件。
+# 想跟着 OMNI_HOME 走就改成 OMNI_HOME + "/mnt"（见下方「路径」一节）。
 MNT = "~/mnt"
 
 # ---------------- 挂载点清单（唯一真源）----------------
@@ -82,17 +85,21 @@ CONTENT_MAX_BYTES  = 2 * 1024 * 1024    # 单文件超过 2 MB 不索引内容
 CONTENT_KEEP_CHARS = 20 * 1024          # 20K 字符（FTS5 trigram 对中文膨胀实测 ~50x，必须收紧）
 CONTENT_TIMEOUT_S  = 8                  # 单文件解析超时
 
-# ---------------- 路径（都相对 OMNI_HOME，默认 ~/wg）----------------
-DB_PATH       = "~/wg/omni.db"
-INVENTORY_DIR = "~/wg/inventory"
-REPORT_DIR    = "~/wg/reports"
-LOG_PATH      = "~/wg/.omni/omni.log"
-STATE_DIR     = "~/wg/.omni"
+# ---------------- 路径（全部相对 OMNI_HOME，默认 ~/wg）----------------
+# 下面这些路径由 OMNI_HOME 派生 —— 换根目录只需 `export OMNI_HOME=/your/path`，
+# 不用改本文件。想单独把某一项指到别处，把它写死成绝对路径即可（如 DB_PATH = "/data/omni.db"）。
+import os as _os
+OMNI_HOME = _os.path.expanduser(_os.environ.get("OMNI_HOME", "~/wg"))
+DB_PATH       = _os.path.join(OMNI_HOME, "omni.db")
+INVENTORY_DIR = _os.path.join(OMNI_HOME, "inventory")
+REPORT_DIR    = _os.path.join(OMNI_HOME, "reports")
+LOG_PATH      = _os.path.join(OMNI_HOME, ".omni", "omni.log")
+STATE_DIR     = _os.path.join(OMNI_HOME, ".omni")
 
 # ---------------- 知识层（收集箱 / 声明式规则）----------------
-WIKI_DIR    = "~/wg/wiki"          # 知识页（整理后的沉淀层）
-WIKI_RAW    = "~/wg/wiki/raw"      # 收集箱：omni save 落这里，攒批后整理
-AGENTS_PATH = "~/wg/AGENTS.md"     # AI 工作规则声明（所有 AI 工具读同一套边界）
+WIKI_DIR    = _os.path.join(OMNI_HOME, "wiki")         # 知识页（整理后的沉淀层）
+WIKI_RAW    = _os.path.join(OMNI_HOME, "wiki", "raw")  # 收集箱：omni save 落这里，攒批后整理
+AGENTS_PATH = _os.path.join(OMNI_HOME, "AGENTS.md")    # AI 工作规则声明（所有 AI 工具读同一套边界）
 SCAN_HARD_LIMIT_S   = 600      # 单挂载点扫描硬上限（超时断点续扫）
 SCAN_MIN_INTERVAL_H = 6        # 自动扫描最小间隔（防抖）
 SEARCH_LIMIT        = 50       # find 默认返回条数

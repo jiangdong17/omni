@@ -170,6 +170,7 @@ EOF
 ├── omni.sh            # 入口脚本
 ├── README.md          # 英文说明
 ├── INSTALL.zh-CN.md   # ★ 安装与多机配置说明书
+├── CHANGELOG.md       # 版本更新日志
 ├── omni.db            # SQLite 索引（唯一数据文件）
 ├── inventory/         # L1 资产卡片
 ├── reports/           # 巡视报告
@@ -184,4 +185,4 @@ EOF
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。
+MIT，见 [LICENSE](LICENSE)。版本更新记录见 [CHANGELOG.md](CHANGELOG.md)。
