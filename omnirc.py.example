@@ -1,0 +1,135 @@
+# omnirc.py —— omni 配置示例
+#
+# 使用方式：复制为 <OMNI_HOME>/omnirc.py（默认 ~/wg/omnirc.py）并按需修改。
+# omni 每次运行都会重新读取本文件，改完立即生效，无需重启任何东西。
+#
+# 安全硬约束 S1：omni 绝不删 / 移 / 改用户文件，只写
+#   DB_PATH / INVENTORY_DIR / REPORT_DIR / STATE_DIR，以及 WIKI_RAW（仅新增副本）。
+# 源文件永远只读；清理建议只输出命令不代执行；破坏性命令（db rebuild）必须 --yes。
+
+MNT = "~/mnt"
+
+# ---------------- 挂载点清单（唯一真源）----------------
+# 字段说明：
+#   label        唯一标识（出现在 find 输出、资产卡片 id、巡视报告里）
+#   host         逻辑主机名（用于分组与「主机是否可达」判断）
+#   ip           该主机在隧道 / 局域网中的地址（用于 TCP 445 探测）
+#   share        SMB 共享名
+#   content      True  = 对该共享做全文内容抽取（慢、占 DB，适合文档目录）
+#                False = 只建文件名索引（快，适合代码 / 媒体 / 大盘）
+#   max_scan_s   可选，单挂载点扫描硬上限覆盖（默认取 SCAN_HARD_LIMIT_S）
+#   max_depth    可选，内容索引递归深度上限
+MOUNTS = [
+    # 示例：两台远端主机 × 若干共享
+    dict(label="laptop-c",  host="laptop", ip="198.51.100.2", share="C$", content=False),
+    dict(label="laptop-d",  host="laptop", ip="198.51.100.2", share="D$", content=True,
+         max_scan_s=2400),                     # 文件很多的大盘，放宽单点扫描上限
+    # 示例：NAS
+    dict(label="nas-home",  host="nas",    ip="192.0.2.10",  share="home",  content=True),
+    dict(label="nas-media", host="nas",    ip="192.0.2.10",  share="media", content=False),
+]
+
+# ---------------- 排除规则（性能的决定因素，不是可选项）----------------
+EXCLUDE_DIRS = {
+    ".git", ".svn", ".hg", "node_modules", "__pycache__", ".venv", "venv",
+    "env", ".tox", ".mypy_cache", ".pytest_cache", "target", "build", "dist",
+    # Windows / NAS 系统目录
+    "$RECYCLE.BIN", "#recycle", "System Volume Information", "$WinREAgent",
+    "Recovery", "$SysReset", "Config.Msi", "MSOCache",
+    "Program Files", "Program Files (x86)", "Windows", "AppData",  # 系统盘跳过
+    # macOS 元数据
+    ".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems",
+    ".DocumentRevisions-V100", ".vol", ".PKG_DEFERRED", ".HFS+ Private Directory Data",
+    # 本项目自身
+    ".omni",
+}
+
+EXCLUDE_EXT = {
+    # 媒体（占空间、按内容搜索无意义）
+    ".jpg",".jpeg",".png",".gif",".bmp",".tif",".tiff",".webp",".heic",".heif",
+    ".raw",".cr2",".nef",".arw",".dng",".psd",".ai",
+    ".mp4",".mov",".avi",".mkv",".flv",".wmv",".m4v",".mpg",".mpeg",".ts",".webm",
+    ".mp3",".wav",".flac",".aac",".m4a",".ogg",".ape",".wma",
+    # 镜像 / 备份 / 压缩
+    ".iso",".dmg",".sparsebundle",".vmdk",".vdi",".qcow2",".vhd",
+    ".zip",".rar",".7z",".tar",".gz",".bz2",".xz",".cab",
+    # 程序 / 库 / 中间产物
+    ".exe",".msi",".dll",".sys",".so",".dylib",".o",".a",".obj",".lib",
+    ".pyc",".pyo",".class",".jar",".war",".apk",".ipa",".bin",
+    # 缓存 / 日志 / 锁
+    ".tmp",".temp",".cache",".lock",".lck",".swp",".swo",".bak",".old",
+}
+
+# 文件名前缀 / 全名排除（防 Word/Excel 临时文件 —— 实测：~$*.docx 不是合法 zip）
+EXCLUDE_NAME_PREFIX = ("~$", ".~lock.", "._", "~WRL")
+EXCLUDE_NAME_EXACT  = {".DS_Store", "Thumbs.db", "desktop.ini", ".localized",
+                       "ehthumbs.db", ".apdisk", "Icon\r"}
+
+# ---------------- 内容索引白名单 ----------------
+CONTENT_EXT = {
+    # 文档类（正文检索的主战场）
+    ".md",".markdown",".txt",".rst",".org",".csv",".tsv",".tex",
+    ".docx",".xlsx",".doc",".rtf",".odt",".html",".htm",".xml",
+}
+TEXT_PLAIN_EXT = {
+    ".md",".markdown",".txt",".rst",".org",
+    ".py",".js",".ts",".jsx",".tsx",".sh",".bash",".zsh",".fish",".ps1",".bat",".cmd",
+    ".c",".cpp",".cc",".h",".hpp",".cs",".java",".go",".rs",".rb",".php",".lua",
+    ".json",".yaml",".yml",".toml",".ini",".conf",".cfg",".xml",".css",".scss",
+    ".less",".sql",".csv",".tsv",".tex",
+}
+CONTENT_MAX_BYTES  = 2 * 1024 * 1024    # 单文件超过 2 MB 不索引内容
+CONTENT_KEEP_CHARS = 20 * 1024          # 20K 字符（FTS5 trigram 对中文膨胀实测 ~50x，必须收紧）
+CONTENT_TIMEOUT_S  = 8                  # 单文件解析超时
+
+# ---------------- 路径（都相对 OMNI_HOME，默认 ~/wg）----------------
+DB_PATH       = "~/wg/omni.db"
+INVENTORY_DIR = "~/wg/inventory"
+REPORT_DIR    = "~/wg/reports"
+LOG_PATH      = "~/wg/.omni/omni.log"
+STATE_DIR     = "~/wg/.omni"
+
+# ---------------- 知识层（收集箱 / 声明式规则）----------------
+WIKI_DIR    = "~/wg/wiki"          # 知识页（整理后的沉淀层）
+WIKI_RAW    = "~/wg/wiki/raw"      # 收集箱：omni save 落这里，攒批后整理
+AGENTS_PATH = "~/wg/AGENTS.md"     # AI 工作规则声明（所有 AI 工具读同一套边界）
+SCAN_HARD_LIMIT_S   = 600      # 单挂载点扫描硬上限（超时断点续扫）
+SCAN_MIN_INTERVAL_H = 6        # 自动扫描最小间隔（防抖）
+SEARCH_LIMIT        = 50       # find 默认返回条数
+DOC_EXTS = {".md",".markdown",".txt",".doc",".docx",".rtf",".odt",".pdf",
+            ".xlsx",".pptx",".csv",".tex",".org",".rst"}
+
+# ---------------- L1 资产卡片：关键目录（inv init 时生成，可留空）----------------
+# 每条描述一个「值得单独建档」的目录；omni inv sync 会用索引统计回填 size/files。
+KEY_DIRS = [
+    # dict(id="example-proj", mount="laptop-d", rel="/projects",
+    #      owner="me", purpose="示例：把某个重要目录建成一张卡片",
+    #      tags=["示例"], health="ok"),
+]
+
+# ---------------- L3 同步规则（上行推送到知识库，可留空）----------------
+# glob  : 匹配哪些本地文件
+# exts  : 只同步这些扩展名
+# kb    : 目标知识库名（ima / 其他）
+# max_mb: 单文件大小上限
+SYNC_RULES = [
+    # dict(glob="~/mnt/nas-home/docs/**/*", exts=(".docx",".pdf"), kb="我的知识库", max_mb=50),
+]
+
+# ---------------- L4 巡视规则 ----------------
+AUDIT = {
+    # (显示名, IP, 端口)：探测这些端点的 TCP 可达性，判断隧道 / 主机是否在线
+    "tunnel_targets": [("laptop", "198.51.100.2", 445), ("nas", "192.0.2.10", 445)],
+    "disk_warn_pct": 10,        # 剩余空间低于该百分比告警
+    "stale_backup": [
+        # 备份滞后告警：src 比 dst_glob 匹配到的最新副本新了超过 lag_days 天
+        # dict(label="示例备份", src="~/mnt/laptop-d/projects",
+        #      dst_glob="~/mnt/nas-home/backup*", lag_days=3),
+    ],
+    "junk_paths": [
+        # 垃圾目录只报告不删除
+        # "~/mnt/laptop-d/tmp",
+    ],
+    "index_stale_days": 7,      # 索引超过该天数未更新则告警
+    "webhook_wecom": "",        # 企业微信机器人 webhook（留空 = 不推送）
+}

@@ -1,0 +1,24 @@
+# 本地配置与运行时数据（绝不提交）
+omnirc.py
+*.conf
+*.key
+*.pem
+*.p12
+
+# 数据库与索引产物
+omni.db
+omni.db-*
+*-wal
+*-shm
+
+# 运行时目录
+.omni/
+__pycache__/
+*.pyc
+inventory/
+reports/
+wiki/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
