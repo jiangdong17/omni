@@ -4,7 +4,7 @@
 
 用法: omni <command> [options]        omni --help
 
-安全硬约束 S1：omni 绝不删/移/改用户文件，只写 ~/wg/{inventory,reports,wiki,.omni}/ 与 omni.db。
+安全硬约束 S1：omni 绝不删/移/改用户文件，只写 $OMNI_HOME/{inventory,reports,wiki,.omni}/ 与 omni.db。
 save 收集箱只往 wiki/raw 写副本（网页抓取/文件复制），源文件永远只读。
 清理建议只输出命令不代执行；破坏性命令（db rebuild）必须 --yes。
 """
@@ -14,6 +14,98 @@ from fnmatch import fnmatch
 
 VERSION = "1.1.0"
 WG = os.path.expanduser(os.environ.get("OMNI_HOME", "~/wg"))
+
+# ============================================================ i18n（多语言）
+# 设计：中文原文即 key；译文目录在同目录的 omni_i18n.py。缺失译文回落中文原文，永不报错。
+# 语言判定优先级：--lang  >  $OMNI_LANG  >  $LC_ALL / $LC_MESSAGES / $LANG  >  en
+LANG = "en"
+
+def _detect_lang():
+    v = os.environ.get("OMNI_LANG", "")
+    if not v:
+        v = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES")
+             or os.environ.get("LANG") or "")
+    v = v.split(":")[0].split(".")[0].split("_")[0].strip().lower()
+    return "zh" if v.startswith("zh") else "en"
+
+def _load_catalog():
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import omni_i18n
+        return getattr(omni_i18n, "CATALOG", {})
+    except Exception:
+        return {}
+
+_CATALOG = _load_catalog()
+_I18N = {}
+
+# argparse 自带的英文提示（usage:/positional arguments/options/错误信息）单独映射，
+# 因为它们的源语言是英文，而 omni 自己的源语言是中文。
+_ARGPARSE_ZH = {
+    "usage: ": "用法: ",
+    "positional arguments": "位置参数",
+    "options": "选项",
+    "subcommands": "子命令",
+    "show this help message and exit": "显示本帮助并退出",
+    "show program's version number and exit": "显示本程序的版本号并退出",
+    " (default: %(default)s)": "（默认: %(default)s）",
+    "%(prog)s: error: %(message)s\n": "%(prog)s: 错误: %(message)s\n",
+    "%(prog)s: warning: %(message)s\n": "%(prog)s: 警告: %(message)s\n",
+    "ambiguous option: %(option)s could match %(matches)s": "选项不明确: %(option)s 可能是 %(matches)s",
+    "argument %(argument_name)s: %(message)s": "参数 %(argument_name)s: %(message)s",
+    "expected at least one argument": "至少需要一个参数",
+    "expected at most one argument": "至多需要一个参数",
+    "expected one argument": "需要一个参数",
+    "ignored explicit argument %r": "已忽略显式参数 %r",
+    "invalid %(type)s value: %(value)r": "%(type)s 值无效: %(value)r",
+    "invalid choice: %(value)r (choose from %(choices)s)": "选项无效: %(value)r（可选: %(choices)s）",
+    "not allowed with argument %s": "不允许与参数 %s 同时使用",
+    "one of the arguments %s is required": "参数 %s 中必须给出一个",
+    "the following arguments are required: %s": "缺少必需参数: %s",
+    "unrecognized arguments: %s": "无法识别的参数: %s",
+    "unknown parser %(parser_name)r (choices: %(choices)s)": "未知子命令 %(parser_name)r（可选: %(choices)s）",
+    "'required' is an invalid argument for positionals": "'required' 不能用于位置参数",
+    "cannot have multiple subparser arguments": "不能有多个子命令参数",
+    "mutually exclusive arguments must be optional": "互斥参数必须是可选的",
+}
+_ARGPARSE_ZH_NG = {
+    ("expected %s argument", "expected %s arguments"): ("需要 %s 个参数", "需要 %s 个参数"),
+    ("conflicting option string: %s", "conflicting option strings: %s"):
+        ("选项字符串冲突: %s", "选项字符串冲突: %s"),
+}
+
+def _patch_argparse():
+    """让 argparse 自带的 help 标题与报错也跟随语言。"""
+    import argparse as _ap
+    if LANG == "zh":
+        _ap._ = lambda s: _ARGPARSE_ZH.get(s, s)
+        def _ng(s, p, n):
+            pair = _ARGPARSE_ZH_NG.get((s, p))
+            if not pair:
+                return s if n == 1 else p
+            return pair[0] if n == 1 else pair[1]
+        _ap.ngettext = _ng
+    else:
+        from gettext import gettext as _gt, ngettext as _ngt
+        _ap._ = _gt
+        _ap.ngettext = _ngt
+
+def set_lang(code):
+    """切换语言。code 为空时自动探测。未知语言回落英文目录，再回落中文原文。"""
+    global LANG, _I18N
+    code = (code or "").strip().lower()
+    LANG = _detect_lang() if not code else ("zh" if code.startswith("zh") else code)
+    _I18N = {} if LANG == "zh" else _CATALOG.get(LANG, {})
+    _patch_argparse()
+
+def T(s, *args):
+    """把 UI 中文原文翻译成当前语言；缺译文回落原文。可选 args 走 % 格式化。"""
+    out = s if (LANG == "zh" or not _I18N) else _I18N.get(s, s)
+    return out % args if args else out
+
+set_lang(os.environ.get("OMNI_LANG", ""))
 
 # ============================================================ 基础设施
 def load_cfg():
@@ -26,14 +118,14 @@ def load_cfg():
 
 def log(msg):
     cfg = load_cfg.__dict__.get("_cfg")
-    path = os.path.expanduser(getattr(cfg, "LOG_PATH", "~/wg/.omni/omni.log")) if cfg else \
+    path = os.path.expanduser(getattr(cfg, "LOG_PATH", os.path.join(WG, ".omni/omni.log"))) if cfg else \
         os.path.join(WG, ".omni/omni.log")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write("[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
 
 def state_dir():
-    return os.path.expanduser("~/wg/.omni")
+    return os.path.join(WG, ".omni")
 
 def state_file(name):
     return os.path.join(state_dir(), name)
@@ -61,11 +153,11 @@ def human(n):
 
 def age_h(ts):
     if not ts:
-        return "从未"
+        return T("从未")
     d = time.time() - ts
-    if d < 3600:   return "%d 分钟前" % (d / 60)
-    if d < 86400:  return "%.1f 小时前" % (d / 3600)
-    return "%.1f 天前" % (d / 86400)
+    if d < 3600:   return T("%d 分钟前") % (d / 60)
+    if d < 86400:  return T("%.1f 小时前") % (d / 3600)
+    return T("%.1f 天前") % (d / 86400)
 
 def is_mounted(path):
     out = subprocess.run(["mount"], capture_output=True, text=True).stdout
@@ -182,11 +274,11 @@ def get_mount_row(conn, label):
 # ============================================================ P0 doctor / mounts / selftest
 def cmd_doctor(cfg, args):
     ok = warn = fail = 0
-    print("omni %s · 自检" % VERSION)
+    print(T("omni %s · 自检") % VERSION)
     print("-" * 62)
     # 解释器 / SQLite
     sv = "%d.%d.%d" % sys.version_info[:3]
-    print("解释器      %s  (%s)" % (sv, sys.executable))
+    print(T("解释器      %s  (%s)") % (sv, sys.executable))
     sq = sqlite3.sqlite_version
     tri = False
     try:
@@ -196,20 +288,20 @@ def cmd_doctor(cfg, args):
         tri = c.execute("SELECT count(*) FROM t WHERE t MATCH '\"全文检索\"'").fetchone()[0] == 1
     except Exception:
         pass
-    print("SQLite      %s   FTS5+trigram: %s" % (sq, "可用" if tri else "不可用"))
+    print("SQLite      %s   FTS5+trigram: %s" % (sq, T("可用") if tri else T("不可用")))
     ok += 1
     # 配置 / 挂载
     mounts = resolve_mounts(cfg)
-    print("配置        %d 个挂载点（内容索引 %d 个）" %
+    print(T("配置        %d 个挂载点（内容索引 %d 个）") %
           (len(mounts), sum(1 for m in mounts if m["content_idx"])))
     mounted = [m for m in mounts if is_mounted(m["mountpoint"])]
-    print("挂载        %d / %d 已挂载" % (len(mounted), len(mounts)))
+    print(T("挂载        %d / %d 已挂载") % (len(mounted), len(mounts)))
     if len(mounted) < len(mounts):
         warn += 1
         for m in mounts:
             if not is_mounted(m["mountpoint"]):
-                print("  ⚠ 未挂载: %s (%s)" % (m["label"], m["mountpoint"]))
-        print("  修复: 挂载该共享后重跑（见 INSTALL.md 第 4 节）")
+                print(T("  ⚠ 未挂载: %s (%s)") % (m["label"], m["mountpoint"]))
+        print(T("  修复: 挂载该共享后重跑（见 INSTALL.md 第 4 节）"))
     else:
         ok += 1
     # DB
@@ -219,19 +311,19 @@ def cmd_doctor(cfg, args):
         conn = connect(cfg, create=False)
         try:
             n = conn.execute("SELECT count(*) FROM files").fetchone()[0]
-            print("数据库      %s · %s · %s 条文件" % (dbp, human(size), n))
+            print(T("数据库      %s · %s · %s 条文件") % (dbp, human(size), n))
         except Exception:
-            print("数据库      %s · %s · (需重建)" % (dbp, human(size)))
+            print(T("数据库      %s · %s · (需重建)") % (dbp, human(size)))
             warn += 1
         conn.close()
         if size > 4 << 30:
-            print("  ❗ DB 超过 4 GB，内容索引范围可能配错（omni db rebuild 后调小）")
+            print(T("  ❗ DB 超过 4 GB，内容索引范围可能配错（omni db rebuild 后调小）"))
             fail += 1
         elif size > 2 << 30:
-            print("  ⚠ DB 较大（%s）。83.6 万条目 + 全文属正常；如需瘦身：omnirc 收紧 CONTENT_EXT" % human(size))
+            print(T("  ⚠ DB 较大（%s）。83.6 万条目 + 全文属正常；如需瘦身：omnirc 收紧 CONTENT_EXT") % human(size))
             warn += 1
     else:
-        print("数据库      尚未建立（首次运行 omni index 自动创建）")
+        print(T("数据库      尚未建立（首次运行 omni index 自动创建）"))
     # 网络可达
     for m in mounts:
         ip = m.get("ip")
@@ -241,29 +333,29 @@ def cmd_doctor(cfg, args):
     for ip in hosts:
         s = socket.socket(); s.settimeout(2.0)
         try:
-            s.connect((ip, 445)); st = "SMB 可达"
+            s.connect((ip, 445)); st = T("SMB 可达")
             ok += 1
         except Exception:
-            st = "不可达"; warn += 1
+            st = T("不可达"); warn += 1
         finally:
             s.close()
-        print("网络        %-14s %s" % (ip, st))
+        print(T("网络        %-14s %s") % (ip, st))
     print("-" * 62)
-    print("结论: ok=%d warn=%d fail=%d" % (ok, warn, fail))
+    print(T("结论: ok=%d warn=%d fail=%d") % (ok, warn, fail))
     return 0 if (warn == 0 and fail == 0) else (3 if fail else 1)
 
 def cmd_mounts(cfg, args):
     conn = connect(cfg)
     sync_mounts_table(conn, resolve_mounts(cfg))
     rows = conn.execute("SELECT * FROM mounts ORDER BY id").fetchall()
-    print("%-16s %-9s %-14s %-8s %s" % ("label", "host", "mountpoint", "状态", "上次扫描"))
+    print("%-16s %-9s %-14s %-8s %s" % ("label", "host", "mountpoint", T("状态"), T("上次扫描")))
     print("-" * 86)
     for r in rows:
         mp = is_mounted(r["mountpoint"])
-        st = "已挂载" if mp else "未挂载"
+        st = T("已挂载") if mp else T("未挂载")
         if mp and r["last_error"]:
             st += "(%s)" % r["last_error"]
-        print("%-16s %-9s %-14s %-8s %s · %s 条" %
+        print(T("%-16s %-9s %-14s %-8s %s · %s 条") %
               (r["label"], r["host"], r["mountpoint"].replace(os.path.expanduser("~"), "~"),
                st, age_h(r["last_scan"]), r["last_count"] or 0))
     if args.json:
@@ -315,7 +407,7 @@ def cmd_selftest(cfg, args):
     write_auto_segment(card, "new-auto")
     txt = open(card, encoding="utf-8").read()
     assert "new-auto" in txt and "old" not in txt and "人工内容" in txt
-    print("selftest: 11 项断言全部通过")
+    print(T("selftest: 11 项断言全部通过"))
     return 0
 
 # ============================================================ 扫描器
@@ -402,7 +494,7 @@ def scan_mount(conn, m, cfg, full=False):
                     WHERE label=?""",
                  (int(t0) if not timed_out else row["last_scan"],
                   (row["last_count"] or 0) + n if timed_out else n,
-                  "timeout(断点续扫)" if timed_out else None, m["label"]))
+                  T("timeout(断点续扫)") if timed_out else None, m["label"]))
     conn.commit()
     res = dict(label=m["label"], count=n, skipped=skipped, elapsed=round(elapsed, 1),
                timeout=timed_out)
@@ -430,11 +522,11 @@ def cmd_index(cfg, args):
         except OSError:
             stale = False
         if not stale:
-            print("已有索引进程在跑（pid %s）。查看进度: omni index --status" % pid)
+            print(T("已有索引进程在跑（pid %s）。查看进度: omni index --status") % pid)
             return 1
         try:
             os.remove(lock)
-            log("清除残留索引锁: %s" % lock)
+            log(T("清除残留索引锁: %s") % lock)
         except OSError:
             pass
     if args.bg:
@@ -449,8 +541,9 @@ def cmd_index(cfg, args):
             subprocess.Popen(child, stdin=subprocess.DEVNULL, stdout=out,
                              stderr=subprocess.STDOUT,
                              start_new_session=True, env=env)
-        print("已在后台启动索引。进度: omni index --status   日志: ~/wg/.omni/index.out")
+        print(T("已在后台启动索引。进度: omni index --status   日志: %s/.omni/index.out") % WG)
         return 0
+    os.makedirs(state_dir(), exist_ok=True)
     open(lock, "w").write(str(os.getpid()))
     try:
         if args.content:
@@ -460,19 +553,19 @@ def cmd_index(cfg, args):
         for m in mounts:
             mp = m["mountpoint"]
             if not is_mounted(mp):
-                print("跳过 %s（未挂载）" % m["label"]); continue
+                print(T("跳过 %s（未挂载）") % m["label"]); continue
             if mount_is_dead(m, dhosts):
-                print("跳过 %s（主机 %s 不可达——死挂载点扫描会卡死）" % (m["label"], m.get("host")))
+                print(T("跳过 %s（主机 %s 不可达——死挂载点扫描会卡死）") % (m["label"], m.get("host")))
                 continue
             if not probe_dir_readable(mp):
-                print("跳过 %s（挂载点无响应）" % m["label"]); continue
+                print(T("跳过 %s（挂载点无响应）") % m["label"]); continue
             t0 = time.time()
             r = scan_mount(conn, m, cfg, full=args.full)
-            flag = " ⚠超时断点" if r.get("timeout") else ""
-            print("%-16s %6d 条 (%.1fs)%s" % (r["label"], r["count"], r["elapsed"], flag))
+            flag = T(" ⚠超时断点") if r.get("timeout") else ""
+            print(T("%-16s %6d 条 (%.1fs)%s") % (r["label"], r["count"], r["elapsed"], flag))
             results.append(r)
         done = sum(1 for r in results if not r.get("timeout"))
-        print("完成 %d/%d 个挂载点" % (done, len(results)))
+        print(T("完成 %d/%d 个挂载点") % (done, len(results)))
         if args.content is False and not args.full:
             pass
         return 0
@@ -489,9 +582,9 @@ def _index_content(cfg, conn, labels, limit=None):
         if not m.get("content_idx"):
             continue
         if not is_mounted(m["mountpoint"]):
-            print("跳过 %s（未挂载）" % m["label"]); continue
+            print(T("跳过 %s（未挂载）") % m["label"]); continue
         if mount_is_dead(m, dhosts):
-            print("跳过 %s（主机不可达）" % m["label"]); continue
+            print(T("跳过 %s（主机不可达）") % m["label"]); continue
         row = get_mount_row(conn, m["label"])
         if not row:
             continue
@@ -519,9 +612,9 @@ def _index_content(cfg, conn, labels, limit=None):
                 st[m["label"]] = dict(done=False, content=n, at=int(time.time()))
                 write_state("scan-state.json", st)
         conn.commit()
-        print("%-16s 内容索引 %d 个文件" % (m["label"], n))
+        print(T("%-16s 内容索引 %d 个文件") % (m["label"], n))
         total += n
-    print("内容索引完成，共 %d 个文件" % total)
+    print(T("内容索引完成，共 %d 个文件") % total)
     return 0
 
 # ============================================================ 内容解析
@@ -639,7 +732,7 @@ def parse_span(s):
     s = (s or "").strip().lower()
     m = re.match(r"^(\d+)\s*(m|h|d|w|min|minute|hour|day|week)s?$", s)
     if not m:
-        raise ValueError("时间跨度写法: 30m / 12h / 7d / 4w")
+        raise ValueError(T("时间跨度写法: 30m / 12h / 7d / 4w"))
     n, u = int(m.group(1)), m.group(2)
     mult = dict(min=60, m=60, h=3600, d=86400, w=604800)[u]
     return n * mult
@@ -701,24 +794,24 @@ def fetch_url(url, timeout=20):
         return r.read()
 
 def cmd_save(cfg, args):
-    """收集箱：网页/文件存入 ~/wg/wiki/raw/（只写 wiki 目录，源文件只读 —— S1）。"""
-    raw_dir = os.path.expanduser(getattr(cfg, "WIKI_RAW", "~/wg/wiki/raw"))
+    """收集箱：网页/文件存入 $OMNI_HOME/wiki/raw/（只写 wiki 目录，源文件只读 —— S1）。"""
+    raw_dir = os.path.expanduser(getattr(cfg, "WIKI_RAW", os.path.join(WG, "wiki/raw")))
     os.makedirs(raw_dir, exist_ok=True)
     if args.list:
         fs = sorted(os.listdir(raw_dir))
         if not fs:
-            print("收集箱为空: %s" % raw_dir)
+            print(T("收集箱为空: %s") % raw_dir)
             return 0
         for fn in fs:
             p = os.path.join(raw_dir, fn)
             st = os.stat(p)
             print("%8s  %s  %s" % (human(st.st_size),
                   time.strftime("%Y-%m-%d", time.localtime(st.st_mtime)), fn))
-        print("\n共 %d 件 —— 攒批后可按 ~/wg/AGENTS.md 规则整理成知识页" % len(fs))
+        print(T("\n共 %d 件 —— 攒批后可按 %s/AGENTS.md 规则整理成知识页") % (len(fs), WG))
         return 0
     src = args.src
     if not src:
-        print("用法: omni save <url|文件路径> [--title 标题]   或 omni save --list")
+        print(T("用法: omni save <url|文件路径> [--title 标题]   或 omni save --list"))
         return 2
     today = time.strftime("%Y%m%d")
     if re.match(r"^https?://", src, re.I):
@@ -737,20 +830,20 @@ def cmd_save(cfg, args):
               % (title, src, time.strftime("%Y-%m-%d %H:%M")))
         with open(p, "w", encoding="utf-8") as f:
             f.write(fm + "\n# " + title + "\n\n" + body + "\n")
-        print("已收藏: %s（%s）" % (p, human(len(body.encode("utf-8")))))
+        print(T("已收藏: %s（%s）") % (p, human(len(body.encode("utf-8")))))
         return 0
     fp = os.path.expanduser(src)
     if not os.path.isfile(fp):
-        print("文件不存在: %s" % fp)
+        print(T("文件不存在: %s") % fp)
         return 2
     p = os.path.join(raw_dir, "%s-%s" % (today, os.path.basename(fp)))
     with open(fp, "rb") as a, open(p, "wb") as b:
         b.write(a.read())
-    print("已收藏副本: %s（源文件未动）" % p)
+    print(T("已收藏副本: %s（源文件未动）") % p)
     return 0
 
 def git_auto_commit(cfg, msg):
-    """只提交知识层路径（inventory/reports/wiki/AGENTS.md），不碰 ~/wg 其他内容。"""
+    """只提交知识层路径（inventory/reports/wiki/AGENTS.md），不碰 $OMNI_HOME 其他内容。"""
     paths = ["inventory", "reports", "wiki", "AGENTS.md"]
     try:
         r = subprocess.run(["git", "-C", WG, "rev-parse", "--is-inside-work-tree"],
@@ -768,12 +861,12 @@ def git_auto_commit(cfg, msg):
                        capture_output=True, timeout=30)
         log("git commit: %s" % msg)
     except Exception as e:
-        log("git auto commit 失败: %s" % e)
+        log(T("git auto commit 失败: %s") % e)
 
 def cmd_git(cfg, args):
     if args.action == "commit":
         git_auto_commit(cfg, "omni git commit %s" % time.strftime("%Y-%m-%d %H:%M"))
-        print("已提交（无变更则跳过）")
+        print(T("已提交（无变更则跳过）"))
         return 0
     if args.action == "log":
         subprocess.run(["git", "-C", WG, "log", "--oneline", "-15", "--",
@@ -788,18 +881,18 @@ def find_pack(cfg, conn, query, rows):
     d = os.path.join(state_dir(), "packs")
     os.makedirs(d, exist_ok=True)
     out = os.path.join(d, "pack-%s.md" % time.strftime("%Y%m%d-%H%M%S"))
-    lines = ["# 检索打包 · %s" % time.strftime("%Y-%m-%d %H:%M"), "",
-             "- 查询词: `%s`" % query,
-             "- 命中: %d 条" % len(rows),
-             "- 用途: AI 会话上下文（只读引用，来源可回溯）", ""]
+    lines = [T("# 检索打包 · %s") % time.strftime("%Y-%m-%d %H:%M"), "",
+             T("- 查询词: `%s`") % query,
+             T("- 命中: %d 条") % len(rows),
+             T("- 用途: AI 会话上下文（只读引用，来源可回溯）"), ""]
     for i, r in enumerate(rows, 1):
         p = os.path.join(os.path.expanduser(cfg.MNT), r["mount"], r["rel_path"])
         lines += ["## %d. %s" % (i, r["name"]),
-                  "- 路径: `%s`" % p,
-                  "- 体积: %s · 修改: %s" % (human(r["size"]),
+                  T("- 路径: `%s`") % p,
+                  T("- 体积: %s · 修改: %s") % (human(r["size"]),
                       time.strftime("%Y-%m-%d", time.localtime(r["mtime"])) if r["mtime"] else "—")]
         if r.get("snip"):
-            lines.append("- 摘要: %s" % r["snip"].replace("\n", " ")[:200])
+            lines.append(T("- 摘要: %s") % r["snip"].replace("\n", " ")[:200])
         if (r.get("content_len") or 0) > 0:
             row = conn.execute("SELECT content FROM files WHERE id=?", (r["id"],)).fetchone()
             if row and row["content"]:
@@ -811,8 +904,8 @@ def find_pack(cfg, conn, query, rows):
 
 # ============================================================ ima OpenAPI 集成（官方 https://ima.qq.com/agent-interface）
 IMA_BASE = "https://ima.qq.com"
-IMA_MEDIA_TYPE = {1: "PDF", 2: "网页", 3: "Word", 4: "PPT", 5: "Excel",
-                  6: "公众号", 7: "Markdown", 9: "图片", 11: "笔记", 99: "文件夹"}
+IMA_MEDIA_TYPE = {1: "PDF", 2: T("网页"), 3: "Word", 4: "PPT", 5: "Excel",
+                  6: T("公众号"), 7: "Markdown", 9: T("图片"), 11: T("笔记"), 99: T("文件夹")}
 _ima_last_call = [0.0]
 
 def ima_creds():
@@ -834,9 +927,9 @@ def ima_post(endpoint, body, timeout=30):
     import urllib.request
     cid, key = ima_creds()
     if not cid or not key:
-        raise RuntimeError("缺少 ima 凭证：访问 https://ima.qq.com/agent-interface 获取 "
+        raise RuntimeError(T("缺少 ima 凭证：访问 https://ima.qq.com/agent-interface 获取 "
                            "Client ID + API Key，写入 ~/.config/ima/client_id 和 api_key "
-                           "（各一行），或 export IMA_OPENAPI_CLIENTID / IMA_OPENAPI_APIKEY")
+                           "（各一行），或 export IMA_OPENAPI_CLIENTID / IMA_OPENAPI_APIKEY"))
     gap = 0.5 - (time.time() - _ima_last_call[0])
     if gap > 0:
         time.sleep(gap)
@@ -862,15 +955,15 @@ def ima_resolve_kb(ref):
     for kb in r2.get("info_list", []):
         if kb.get("kb_name") == ref:
             return kb["kb_id"], kb["kb_name"]
-    raise RuntimeError("找不到知识库 %r —— omni ima list 看全部" % ref)
+    raise RuntimeError(T("找不到知识库 %r —— omni ima list 看全部") % ref)
 
 def cmd_ima(cfg, args):
     try:
         return _ima_main(cfg, args)
     except RuntimeError as e:
-        print("失败: %s" % e)
+        print(T("失败: %s") % e)
         if "200002" in str(e):
-            print("→ API Key 已过期，去 https://ima.qq.com/agent-interface 删除后重新获取")
+            print(T("→ API Key 已过期，去 https://ima.qq.com/agent-interface 删除后重新获取"))
         return 2
 
 def _ima_main(cfg, args):
@@ -878,25 +971,25 @@ def _ima_main(cfg, args):
     if args.action == "setup":
         cid, key = ima_creds()
         if not cid or not key:
-            print("未配置凭证。步骤：")
-            print("  1. 电脑版 ima 登录后访问 https://ima.qq.com/agent-interface")
-            print("  2. 点「获取 API Key」（只显示一次，立即保存）")
+            print(T("未配置凭证。步骤："))
+            print(T("  1. 电脑版 ima 登录后访问 https://ima.qq.com/agent-interface"))
+            print(T("  2. 点「获取 API Key」（只显示一次，立即保存）"))
             print("  3. mkdir -p ~/.config/ima && echo <ClientID> > ~/.config/ima/client_id")
             print("     && echo <APIKey> > ~/.config/ima/api_key && chmod 700 ~/.config/ima")
             return 1
         try:
             r = ima_post("openapi/wiki/v1/search_knowledge_base", {"query": "", "cursor": "", "limit": 1})
-            print("凭证有效，连接正常（返回 %d 个示例知识库）" % len(r.get("info_list", [])))
+            print(T("凭证有效，连接正常（返回 %d 个示例知识库）") % len(r.get("info_list", [])))
             return 0
         except RuntimeError as e:
-            print("连接失败: %s" % e)
+            print(T("连接失败: %s") % e)
             if "200002" in str(e):
-                print("→ API Key 已过期，去 agent-interface 删除后重新获取")
+                print(T("→ API Key 已过期，去 agent-interface 删除后重新获取"))
             return 2
     if args.action == "list":
         r = ima_post("openapi/wiki/v1/search_knowledge_base", {"query": "", "cursor": "", "limit": 50})
         for kb in r.get("info_list", []):
-            print("%-28s %s · %s 条" % (kb.get("kb_name", "?"), kb.get("kb_id"),
+            print(T("%-28s %s · %s 条") % (kb.get("kb_name", "?"), kb.get("kb_id"),
                                         kb.get("content_count", "?")))
         return 0
     if args.action == "ls":
@@ -922,7 +1015,7 @@ def _ima_main(cfg, args):
                          (kb_id, kb_name, it.get("title", ""), it.get("media_type"),
                           it.get("file_size") or 0, now))
         conn.commit()
-        print("\n%s: %d 条（已入 kb_items 表，供 find/审计用）" % (kb_name, len(items)))
+        print(T("\n%s: %d 条（已入 kb_items 表，供 find/审计用）") % (kb_name, len(items)))
         return 0
     if args.action == "pull":
         kb_id, kb_name = ima_resolve_kb(args.kb)
@@ -947,23 +1040,23 @@ def _ima_main(cfg, args):
         # 生成 ima 卡片（与 sync pull 同款）
         inv_dir = os.path.expanduser(cfg.INVENTORY_DIR)
         os.makedirs(inv_dir, exist_ok=True)
-        auto = "条目数 %d\n\n最近条目：\n%s" % (len(items),
+        auto = T("条目数 %d\n\n最近条目：\n%s") % (len(items),
             "\n".join("- [%s] %s" % (IMA_MEDIA_TYPE.get(i.get("media_type"), "?"),
                       i.get("title", "")) for i in items[:30]))
         fm = dict(id="ima-" + slug(kb_name), kind="dataset", host="ima", owner="",
-                  purpose="ima 知识库回流（OpenAPI）", tags=["ima", kb_name], health="ok",
+                  purpose=T("ima 知识库回流（OpenAPI）"), tags=["ima", kb_name], health="ok",
                   review_by="", status="待人工确认", sources=[], related=[])
         make_card(os.path.join(inv_dir, "ima-%s.md" % slug(kb_name)),
                   fm, "ima · %s" % kb_name, auto)
-        print("pull: %s 共 %d 条入 kb_items + 卡片已更新" % (kb_name, len(items)))
+        print(T("pull: %s 共 %d 条入 kb_items + 卡片已更新") % (kb_name, len(items)))
         return 0
     if args.action == "push":
         fp = os.path.expanduser(args.file)
         if not os.path.isfile(fp):
-            print("文件不存在: %s" % fp)
+            print(T("文件不存在: %s") % fp)
             return 2
         if not args.kb:
-            print("用法: omni ima push <文件> --kb <知识库名或ID> [--note]")
+            print(T("用法: omni ima push <文件> --kb <知识库名或ID> [--note]"))
             return 2
         kb_id, kb_name = ima_resolve_kb(args.kb)
         name = os.path.basename(fp)
@@ -981,14 +1074,14 @@ def _ima_main(cfg, args):
                           {"media_type": 11, "note_info": {"content_id": note_id},
                            "title": title, "knowledge_base_id": kb_id})
             media_id = r2.get("media_id", note_id)
-            print("已推（笔记通道）: %s → %s\nnote_id=%s media_id=%s" % (fp, kb_name, note_id, media_id))
+            print(T("已推（笔记通道）: %s → %s\nnote_id=%s media_id=%s") % (fp, kb_name, note_id, media_id))
         else:
             # 文件通道：create_media → COS 直传 → add_knowledge（需 qcloud_cos）
             try:
                 from qcloud_cos import CosConfig, CosS3Client
             except ImportError:
-                print("文件通道需要腾讯云 COS SDK（md/txt 请走 --note 笔记通道，免依赖）:")
-                print("  pip install cos-python-sdk-v5 安装到 omni 的 venv 后重试")
+                print(T("文件通道需要腾讯云 COS SDK（md/txt 请走 --note 笔记通道，免依赖）:"))
+                print(T("  pip install cos-python-sdk-v5 安装到 omni 的 venv 后重试"))
                 return 2
             ct_map = {"pdf": ("application/pdf", 1), "doc": ("application/msword", 3),
                       "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", 3),
@@ -1018,7 +1111,7 @@ def _ima_main(cfg, args):
                 resp = client.put_object(Bucket=cos["bucket_name"], Key=cos["cos_key"],
                                          Body=f, ContentType=content_type)
             if not resp.get("ETag"):
-                print("COS 上传失败: %s" % resp)
+                print(T("COS 上传失败: %s") % resp)
                 return 2
             r2 = ima_post("openapi/wiki/v1/add_knowledge",
                           {"media_type": media_type, "media_id": r["media_id"], "title": title,
@@ -1026,7 +1119,7 @@ def _ima_main(cfg, args):
                            "file_info": {"cos_key": cos["cos_key"], "file_size": size,
                                          "file_name": name}})
             media_id = r2.get("media_id", r["media_id"])
-            print("已推（文件通道）: %s → %s\nmedia_id=%s" % (fp, kb_name, media_id))
+            print(T("已推（文件通道）: %s → %s\nmedia_id=%s") % (fp, kb_name, media_id))
         conn.execute("INSERT OR IGNORE INTO push_log(local_path,content_sha,kb_id,kb_name,"
                      "pushed_at,status,detail) VALUES(?,?,?,?,?,?,?)",
                      (fp, sha, kb_id, kb_name, int(time.time()), "ok", str(media_id)))
@@ -1042,24 +1135,24 @@ def cmd_find(cfg, args):
                   limit=args.limit, newer_than=newer)
     if getattr(args, "pack", False):
         out = find_pack(cfg, conn, args.query, rows)
-        print("已打包 %d 条 → %s" % (len(rows), out))
-        print("把该文件直接发给 AI 会话当上下文即可")
+        print(T("已打包 %d 条 → %s") % (len(rows), out))
+        print(T("把该文件直接发给 AI 会话当上下文即可"))
         return 0
     if args.json:
         print(json.dumps(rows, ensure_ascii=False))
         return 0
     if not rows:
-        print("（无结果）")
+        print(T("（无结果）"))
         return 0
     for i, r in enumerate(rows, 1):
         p = os.path.join(os.path.expanduser(cfg.MNT), r["mount"], r["rel_path"])
-        tag = {"match": "文", "like": "名"}.get(r["hit"], "?")
-        extra = " [含内容]" if (r.get("content_len") or 0) > 0 else ""
+        tag = {"match": T("文"), "like": T("名")}.get(r["hit"], "?")
+        extra = T(" [含内容]") if (r.get("content_len") or 0) > 0 else ""
         print("%3d. [%s] %-14s %s%s" % (i, tag, r["mount"], r["name"], extra))
         print("        %s · %s · %s" % (human(r["size"]), age_h(r["mtime"]), p))
         if r.get("snip"):
             print("        %s" % r["snip"].replace("\n", " ")[:160])
-    print("\n共 %d 条 · 打开: omni open <序号>" % len(rows))
+    print(T("\n共 %d 条 · 打开: omni open <序号>") % len(rows))
     write_state("last-find.json", [dict(r, path=p) for r, p in
                 [(r, os.path.join(os.path.expanduser(cfg.MNT), r["mount"], r["rel_path"]))
                  for r in rows]])
@@ -1076,7 +1169,7 @@ def cmd_recent(cfg, args):
     if args.json:
         print(json.dumps([dict(r) for r in rows], ensure_ascii=False))
         return 0
-    print("最近 %s 变动（%d 条）" % (args.span or "7d", len(rows)))
+    print(T("最近 %s 变动（%d 条）") % (args.span or "7d", len(rows)))
     for r in rows:
         print("  %s  %-14s %s" % (time.strftime("%m-%d %H:%M", time.localtime(r["mtime"])),
                                   r["mount"], r["rel_path"]))
@@ -1087,9 +1180,9 @@ def cmd_du(cfg, args):
     sql = ("SELECT m.label, substr(f.rel_path,1,instr(f.rel_path||'/','/')-1) AS top, "
            "SUM(f.size) AS sz, COUNT(*) AS n FROM files f JOIN mounts m ON m.id=f.mount_id "
            "WHERE f.is_dir=0 GROUP BY m.label, top ORDER BY sz DESC LIMIT ?")
-    print("%-16s %-28s %10s %8s" % ("挂载点", "一级目录", "体积", "文件数"))
+    print("%-16s %-28s %10s %8s" % (T("挂载点"), T("一级目录"), T("体积"), T("文件数")))
     for r in conn.execute(sql, (args.top,)):
-        print("%-16s %-28s %10s %8d" % (r["label"], r["top"] or "(根)", human(r["sz"]), r["n"]))
+        print("%-16s %-28s %10s %8d" % (r["label"], r["top"] or T("(根)"), human(r["sz"]), r["n"]))
     return 0
 
 def cmd_open(cfg, args):
@@ -1107,10 +1200,10 @@ def cmd_open(cfg, args):
         if r:
             path = os.path.join(r["mountpoint"], r["rel_path"])
     if not path or not os.path.exists(path):
-        print("找不到: %s" % key)
+        print(T("找不到: %s") % key)
         return 2
     subprocess.run(["open", "-R", path])
-    print("已在 Finder 显示: %s" % path)
+    print(T("已在 Finder 显示: %s") % path)
     return 0
 
 # ============================================================ P4 资产卡片
@@ -1138,10 +1231,10 @@ def dir_stats(conn, mount_id, rel_prefix=""):
     return r["n"] or 0, r["sz"] or 0, r["newest"] or 0
 
 def card_body_auto(n, sz, newest, extra=""):
-    lines = ["| 项 | 值 |", "|---|---|",
-             "| 文件数 | %d |" % n,
-             "| 总体积 | %s |" % human(sz),
-             "| 最新修改 | %s |" % (time.strftime("%Y-%m-%d %H:%M", time.localtime(newest))
+    lines = [T("| 项 | 值 |"), "|---|---|",
+             T("| 文件数 | %d |") % n,
+             T("| 总体积 | %s |") % human(sz),
+             T("| 最新修改 | %s |") % (time.strftime("%Y-%m-%d %H:%M", time.localtime(newest))
                                    if newest else "—")]
     if extra:
         lines.append(extra)
@@ -1177,7 +1270,7 @@ def cmd_inv(cfg, args):
                       owner="", purpose="", tags=[m["host"]], health="ok", review_by="",
                       status="待人工确认", sources=[], related=[])
             title = "%s · %s" % (m["host"], m["label"])
-            make_card(p, fm, title, "_（首次 inv sync 后填充统计）_")
+            make_card(p, fm, title, T("_（首次 inv sync 后填充统计）_"))
             n += 1
         for k in getattr(cfg, "KEY_DIRS", []):
             p = os.path.join(inv_dir, "%s.md" % k["id"])
@@ -1188,16 +1281,16 @@ def cmd_inv(cfg, args):
                       health=k["health"], review_by="", status="待人工确认",
                       sources=[], related=[])
             make_card(p, fm, "%s · %s" % (k["mount"], k["rel"].strip("/")),
-                      "_（首次 inv sync 后填充统计）_")
+                      T("_（首次 inv sync 后填充统计）_"))
             n += 1
         idx = os.path.join(inv_dir, "_index.md")
         if not os.path.exists(idx):
             with open(idx, "w", encoding="utf-8") as f:
-                f.write("# omni 资产索引\n\n由 `omni inv init` 生成，`omni inv sync` 更新统计。\n\n"
-                        "## 挂载点\n\n| 卡片 | 主机 | 说明 |\n|---|---|---|\n")
-            print("init: 新建 %d 张卡片" % n)
+                f.write(T("# omni 资产索引\n\n由 `omni inv init` 生成，`omni inv sync` 更新统计。\n\n"
+                        "## 挂载点\n\n| 卡片 | 主机 | 说明 |\n|---|---|---|\n"))
+            print(T("init: 新建 %d 张卡片") % n)
         else:
-            print("init: 新建 %d 张卡片（已存在的未动）" % n)
+            print(T("init: 新建 %d 张卡片（已存在的未动）") % n)
         return 0
 
     if args.action == "sync":
@@ -1235,7 +1328,7 @@ def cmd_inv(cfg, args):
         # 更新 _index.md 的表格（AUTO 段）
         idx = os.path.join(inv_dir, "_index.md")
         rows = conn.execute("SELECT * FROM assets ORDER BY host, mount_label").fetchall()
-        tb = ["<!-- OMNI:AUTO:BEGIN -->", "| 卡片 | 主机 | 挂载点 | 文件数 | 体积 | 最新修改 |",
+        tb = ["<!-- OMNI:AUTO:BEGIN -->", T("| 卡片 | 主机 | 挂载点 | 文件数 | 体积 | 最新修改 |"),
               "|---|---|---|---|---|---|"]
         for r in rows:
             tb.append("| [%s](%s) | %s | %s | %d | %s | %s |" % (
@@ -1250,12 +1343,12 @@ def cmd_inv(cfg, args):
             else:
                 with open(idx, "a", encoding="utf-8") as f:
                     f.write("\n" + "\n".join(tb) + "\n")
-        print("sync: 更新 %d 张卡片" % n)
+        print(T("sync: 更新 %d 张卡片") % n)
         return 0
 
     if args.action == "stats":
         rows = conn.execute("SELECT * FROM assets ORDER BY total_size DESC").fetchall()
-        print("%-24s %-9s %-14s %8s %10s  %s" % ("id", "kind", "mount", "文件数", "体积", "最新修改"))
+        print("%-24s %-9s %-14s %8s %10s  %s" % ("id", "kind", "mount", T("文件数"), T("体积"), T("最新修改")))
         for r in rows:
             print("%-24s %-9s %-14s %8d %10s  %s" % (
                 r["id"], r["kind"] or "", r["mount_label"] or "", r["file_count"],
@@ -1284,7 +1377,7 @@ def cmd_inv(cfg, args):
         for r in out:
             print("%-24s %-14s %s" % (r["id"], r["mount_label"] or "",
                                       r["card_path"].replace(os.path.expanduser("~"), "~")))
-        print("共 %d 张" % len(out))
+        print(T("共 %d 张") % len(out))
         return 0
     return 2
 
@@ -1326,7 +1419,7 @@ def cmd_sync(cfg, args):
     conn = connect(cfg)
     if args.action == "push":
         if args.top and not args.dry_run:
-            print("--top 只配合 --dry-run 使用（先出精选清单，确认后再真推）")
+            print(T("--top 只配合 --dry-run 使用（先出精选清单，确认后再真推）"))
             return 2
         cands = []
         n_total = n_new = n_skip = 0
@@ -1359,7 +1452,7 @@ def cmd_sync(cfg, args):
                     if args.top:
                         cands.append((rule["kb"], fp, st.st_size, st.st_mtime))
                     else:
-                        print("[将推] %-24s %s (%s)" % (rule["kb"], fp, human(st.st_size)))
+                        print(T("[将推] %-24s %s (%s)") % (rule["kb"], fp, human(st.st_size)))
                 else:
                     qdir = os.path.join(state_dir(), "push-queue", slug(rule["kb"]))
                     os.makedirs(qdir, exist_ok=True)
@@ -1392,47 +1485,47 @@ def cmd_sync(cfg, args):
                 return s
             cands.sort(key=_score, reverse=True)
             picked = cands[:args.top]
-            print("[精选 TOP %d / 共 %d 候选]（别一次搬完旧料 —— 分批推）" % (len(picked), len(cands)))
+            print(T("[精选 TOP %d / 共 %d 候选]（别一次搬完旧料 —— 分批推）") % (len(picked), len(cands)))
             for kb, fp, sz, mt in picked:
-                print("[将推] %-24s %s (%s, %s)" % (kb, fp, human(sz), age_h(mt)))
+                print(T("[将推] %-24s %s (%s, %s)") % (kb, fp, human(sz), age_h(mt)))
             rp = os.path.expanduser(cfg.REPORT_DIR)
             os.makedirs(rp, exist_ok=True)
             mp = os.path.join(rp, "push-pick-%s.md" % time.strftime("%Y-%m-%d"))
             with open(mp, "w", encoding="utf-8") as f:
-                f.write("# ima 推送精选清单 · %s\n\n共 %d 候选，精选 %d。\n"
-                        "确认后逐条入队（去掉 --dry-run）或按此优先级分批。\n\n"
+                f.write(T("# ima 推送精选清单 · %s\n\n共 %d 候选，精选 %d。\n"
+                        "确认后逐条入队（去掉 --dry-run）或按此优先级分批。\n\n")
                         % (time.strftime("%Y-%m-%d %H:%M"), len(cands), len(picked)))
                 f.writelines("- [ ] `%s`（%s, %s → %s）\n" % (fp, human(sz), age_h(mt), kb)
                              for kb, fp, sz, mt in picked)
-            print("精选清单: %s" % mp)
+            print(T("精选清单: %s") % mp)
             return 0
-        verb = "将推" if args.dry_run else "已入队"
-        print("push: 扫到 %d 个候选，%s %d 个，跳过(已推/超大) %d 个"
+        verb = T("将推") if args.dry_run else T("已入队")
+        print(T("push: 扫到 %d 个候选，%s %d 个，跳过(已推/超大) %d 个")
               % (n_total, verb, n_new, n_skip))
         if not args.dry_run and n_new:
-            print("队列: ~/wg/.omni/push-queue/ —— 两条消费路径：")
-            print("  a) omni ima push <文件> --kb <知识库>   （官方 OpenAPI 直推，推荐）")
-            print("  b) ima-file-upload 链路（create_media→COS→add_knowledge），成功后: omni sync mark <file> ok")
+            print(T("队列: %s/.omni/push-queue/ —— 两条消费路径：") % WG)
+            print(T("  a) omni ima push <文件> --kb <知识库>   （官方 OpenAPI 直推，推荐）"))
+            print(T("  b) ima-file-upload 链路（create_media→COS→add_knowledge），成功后: omni sync mark <file> ok"))
         return 0
     if args.action == "mark":
         # omni sync mark <queued_path> ok|fail
         qpath = os.path.expanduser(args.file)
         row = conn.execute("SELECT * FROM push_log WHERE detail=?", (qpath,)).fetchone()
         if not row:
-            print("push_log 中无此队列文件"); return 2
+            print(T("push_log 中无此队列文件")); return 2
         conn.execute("UPDATE push_log SET status=?, pushed_at=? WHERE id=?",
                      (args.status, int(time.time()), row["id"]))
         conn.commit()
         if args.status == "ok":
             try: os.remove(qpath)
             except OSError: pass
-        print("已标记 %s" % args.status)
+        print(T("已标记 %s") % args.status)
         return 0
     if args.action == "pull":
         dump = state_file("ima-dump.json")
         if not os.path.exists(dump):
-            print("没有 %s —— 由 ima 侧导出（knowledge 列表 JSON 数组："
-                  "kb_id/kb_name/title/media_type/size），放到该路径后重跑" % dump)
+            print(T("没有 %s —— 由 ima 侧导出（knowledge 列表 JSON 数组："
+                  "kb_id/kb_name/title/media_type/size），放到该路径后重跑") % dump)
             return 1
         items = json.load(open(dump, encoding="utf-8"))
         now = int(time.time())
@@ -1455,23 +1548,23 @@ def cmd_sync(cfg, args):
             types = {}
             for it in lst:
                 types[it.get("media_type") or "?"] = types.get(it.get("media_type") or "?", 0) + 1
-            auto = "条目数 %d · 类型: %s\n\n最近条目：\n%s" % (
+            auto = T("条目数 %d · 类型: %s\n\n最近条目：\n%s") % (
                 len(lst),
                 ", ".join("%s×%d" % kv for kv in sorted(types.items(), key=lambda x: -x[1])),
                 "\n".join("- %s" % it.get("title", "") for it in lst[:30]))
             fm = dict(id="ima-" + slug(kb), kind="dataset", host="ima", owner="",
-                      purpose="ima 知识库回流", tags=["ima", kb], health="ok",
+                      purpose=T("ima 知识库回流"), tags=["ima", kb], health="ok",
                       review_by="", related=[])
             make_card(p, fm, "ima · %s" % kb, auto)
-            print("生成卡片: %s (%d 条)" % (p, len(lst)))
-        print("pull: %d 条 ima 条目入库" % len(items))
+            print(T("生成卡片: %s (%d 条)") % (p, len(lst)))
+        print(T("pull: %d 条 ima 条目入库") % len(items))
         return 0
     if args.action == "status":
         nq = conn.execute("SELECT count(*) FROM push_log WHERE status='queued'").fetchone()[0]
         nok = conn.execute("SELECT count(*) FROM push_log WHERE status='ok'").fetchone()[0]
         nfail = conn.execute("SELECT count(*) FROM push_log WHERE status='fail'").fetchone()[0]
         nkb = conn.execute("SELECT count(*) FROM kb_items").fetchone()[0]
-        print("push: queued=%d ok=%d fail=%d   ima 条目=%d" % (nq, nok, nfail, nkb))
+        print(T("push: queued=%d ok=%d fail=%d   ima 条目=%d") % (nq, nok, nfail, nkb))
         return 0
     return 2
 
@@ -1568,16 +1661,16 @@ def cmd_audit(cfg, args):
         if not tcp_ok(ip, port):
             downs.append("%s(%s)" % (host, ip))
     add("tunnel", "fail" if downs else "ok",
-        "不可达: %s" % ",".join(downs) if downs else "全部 SMB 目标均可达",
-        "探测端口 445，超时 2.5s")
+        T("不可达: %s") % ",".join(downs) if downs else T("全部 SMB 目标均可达"),
+        T("探测端口 445，超时 2.5s"))
     # 2 mounts
     mounts = resolve_mounts(cfg)
     missing = [m["label"] for m in mounts if not is_mounted(m["mountpoint"])]
     n_ok = len(mounts) - len(missing)
     add("mounts", "fail" if missing else "ok",
-        ("%d / %d，缺: %s" % (n_ok, len(mounts), ",".join(missing))) if missing
-        else "%d / %d 完整" % (n_ok, len(mounts)),
-        "修复: 挂载缺失共享后重跑（见 INSTALL.md 第 4 节）" if missing else "")
+        (T("%d / %d，缺: %s") % (n_ok, len(mounts), ",".join(missing))) if missing
+        else T("%d / %d 完整") % (n_ok, len(mounts)),
+        T("修复: 挂载缺失共享后重跑（见 INSTALL.md 第 4 节）") if missing else "")
     # 3 disk（★ 主机不可达的挂载点跳过：死挂载点的 statvfs 会不可中断卡死）
     dead = dead_hosts(cfg)
     dead_mps = [os.path.abspath(m["mountpoint"]) for m in mounts if mount_is_dead(m, dead)]
@@ -1592,24 +1685,24 @@ def cmd_audit(cfg, args):
             disk_skipped.append(m["label"]); continue
         r = guarded_statvfs(m["mountpoint"])
         if r is None:
-            disk_skipped.append("%s(无响应)" % m["label"]); continue
+            disk_skipped.append(T("%s(无响应)") % m["label"]); continue
         avail, pct = r
         disk_rows.append((m["label"], pct, avail))
     low = [d for d in disk_rows if d[1] > 100 - A["disk_warn_pct"]]
     add("disk", "warn" if low else "ok",
-        ("剩余不足 %d%%: %s" % (A["disk_warn_pct"],
-         ", ".join("%s(剩%.0f%%)" % (d[0], 100 - d[1]) for d in low))) if low
-        else "全部可测挂载点空间充足",
+        (T("剩余不足 %d%%: %s") % (A["disk_warn_pct"],
+         ", ".join(T("%s(剩%.0f%%)") % (d[0], 100 - d[1]) for d in low))) if low
+        else T("全部可测挂载点空间充足"),
         "; ".join("%s %.0f%%" % (d[0], d[1]) for d in disk_rows) +
-        ("　跳过: %s" % ",".join(disk_skipped) if disk_skipped else ""))
+        (T("　跳过: %s") % ",".join(disk_skipped) if disk_skipped else ""))
     # 4 stale_backup
     for rule in A.get("stale_backup", []):
         src = os.path.expanduser(rule["src"])
         if under_dead(src):
-            add("stale_backup", "info", "%s: 跳过（所属主机不可达）" % rule["label"],
-                "死挂载点上遍历会卡住，等主机上线后再查"); continue
+            add("stale_backup", "info", T("%s: 跳过（所属主机不可达）") % rule["label"],
+                T("死挂载点上遍历会卡住，等主机上线后再查")); continue
         if not os.path.isdir(src):
-            add("stale_backup", "info", "%s: 源不存在 %s" % (rule["label"], src)); continue
+            add("stale_backup", "info", T("%s: 源不存在 %s") % (rule["label"], src)); continue
         smt = newest_mtime_under(src, hard=120)
         dsts = []
         for g in (rule.get("dst_glob") or "").split(","):
@@ -1620,22 +1713,22 @@ def cmd_audit(cfg, args):
         dmt = max([newest_mtime_under(d, hard=120) for d in dsts] or [0]) if dsts else 0
         lag = (smt - dmt) / 86400.0 if (smt and dmt) else None
         if lag is None:
-            add("stale_backup", "info", "%s: 无可比对的目标副本" % rule["label"],
-                "src 最新 %s" % time.strftime("%Y-%m-%d %H:%M", time.localtime(smt)) if smt else "")
+            add("stale_backup", "info", T("%s: 无可比对的目标副本") % rule["label"],
+                T("src 最新 %s") % time.strftime("%Y-%m-%d %H:%M", time.localtime(smt)) if smt else "")
         elif lag > rule["lag_days"]:
             add("stale_backup", "warn",
-                "%s 备份滞后 %.1f 天" % (rule["label"], lag),
-                "源最新 %s；目标最新 %s；建议 rsync 同步" %
+                T("%s 备份滞后 %.1f 天") % (rule["label"], lag),
+                T("源最新 %s；目标最新 %s；建议 rsync 同步") %
                 (time.strftime("%Y-%m-%d %H:%M", time.localtime(smt)),
                  time.strftime("%Y-%m-%d %H:%M", time.localtime(dmt))))
         else:
-            add("stale_backup", "ok", "%s 备份及时（滞后 %.1f 天）" % (rule["label"], lag))
+            add("stale_backup", "ok", T("%s 备份及时（滞后 %.1f 天）") % (rule["label"], lag))
     # 5 junk
     junk_lines = []
     for jp in A.get("junk_paths", []):
         p = os.path.expanduser(jp)
         if under_dead(p):
-            junk_lines.append("%s（跳过：主机不可达）" % jp); continue
+            junk_lines.append(T("%s（跳过：主机不可达）") % jp); continue
         if not os.path.isdir(p):
             continue
         t0, total = time.time(), 0
@@ -1647,8 +1740,8 @@ def cmd_audit(cfg, args):
                 except OSError: pass
         if total:
             junk_lines.append("%s %s" % (jp, human(total)))
-    add("junk", "info", "可清理: %s" % " · ".join(junk_lines) if junk_lines else "无垃圾目录",
-        "（只提示，不代删 —— S1）")
+    add("junk", "info", T("可清理: %s") % " · ".join(junk_lines) if junk_lines else T("无垃圾目录"),
+        T("（只提示，不代删 —— S1）"))
     # 6 index_freshness
     stale = []
     for r in conn.execute("SELECT label,last_scan,last_count FROM mounts WHERE enabled=1"):
@@ -1656,56 +1749,56 @@ def cmd_audit(cfg, args):
             stale.append(r["label"])
     total_files = conn.execute("SELECT count(*) FROM files").fetchone()[0]
     add("index_freshness", "info" if stale else "ok",
-        ("索引过期: %s（跑 omni index）" % ",".join(stale)) if stale
-        else "索引新鲜 · 共 %s 条" % total_files)
+        (T("索引过期: %s（跑 omni index）") % ",".join(stale)) if stale
+        else T("索引新鲜 · 共 %s 条") % total_files)
     # 7 degraded_recent
     week = time.time() - 7 * 86400
     fails = conn.execute("SELECT local_path,detail FROM push_log WHERE status='fail' "
                          "AND pushed_at>=? LIMIT 10", (week,)).fetchall()
     errs = conn.execute("SELECT label,last_error FROM mounts WHERE last_error IS NOT NULL "
                         "AND last_error!=''").fetchall()
-    deg = ["push 失败: %s" % f["local_path"] for f in fails] + \
+    deg = [T("push 失败: %s") % f["local_path"] for f in fails] + \
           ["%s: %s" % (e["label"], e["last_error"]) for e in errs]
     add("degraded_recent", "warn" if deg else "ok",
-        "; ".join(deg) if deg else "近 7 天无降级事件")
+        "; ".join(deg) if deg else T("近 7 天无降级事件"))
     # 8 dup_files（知识层：重复大文件只报不删 —— S1）
     dups = conn.execute("""SELECT f.name, f.size, COUNT(*) AS n,
         GROUP_CONCAT(m.label) AS ms FROM files f JOIN mounts m ON m.id=f.mount_id
         WHERE f.is_dir=0 AND f.size > 10485760
         GROUP BY f.name, f.size HAVING n > 1 ORDER BY f.size DESC LIMIT 8""").fetchall()
     if dups:
-        det = "; ".join("%s ×%d（%s/份，%s）" % (d["name"], d["n"], human(d["size"]),
+        det = "; ".join(T("%s ×%d（%s/份，%s）") % (d["name"], d["n"], human(d["size"]),
                        d["ms"]) for d in dups)
-        add("dup_files", "info", "疑似重复大文件 %d 组（只提示，不代删）" % len(dups), det)
+        add("dup_files", "info", T("疑似重复大文件 %d 组（只提示，不代删）") % len(dups), det)
     else:
-        add("dup_files", "ok", "无 >10MB 同名同体积重复")
+        add("dup_files", "ok", T("无 >10MB 同名同体积重复"))
     # 9 cards_drift（卡片与配置漂移）
     inv_dir = os.path.expanduser(cfg.INVENTORY_DIR)
     cards = [f[:-3] for f in os.listdir(inv_dir)
              if f.endswith(".md") and f != "_index.md"] if os.path.isdir(inv_dir) else []
     if not cards:
-        add("cards_drift", "info", "无资产卡片（跑 omni inv init）")
+        add("cards_drift", "info", T("无资产卡片（跑 omni inv init）"))
     else:
         known = {r["label"] for r in conn.execute("SELECT label FROM mounts")}
         kb_ids = {k["id"] for k in getattr(cfg, "KEY_DIRS", [])}
         ima_ids = {c[4:] for c in cards if c.startswith("ima-")}
         drift = [c for c in cards if c not in known and c not in kb_ids and c not in ima_ids]
         add("cards_drift", "warn" if drift else "ok",
-            ("卡片与配置漂移: %s" % ",".join(drift)) if drift
-            else "%d 张卡片与配置一致" % len(cards))
+            (T("卡片与配置漂移: %s") % ",".join(drift)) if drift
+            else T("%d 张卡片与配置一致") % len(cards))
     # 10 index_coverage（配置挂载点是否全部入库）
     db_labels = {r["label"] for r in conn.execute("SELECT label FROM mounts")}
     cfg_labels = {m["label"] for m in mounts}
     miss = cfg_labels - db_labels
     add("index_coverage", "warn" if miss else "ok",
-        ("配置中挂载点未入库: %s" % ",".join(miss)) if miss
-        else "配置挂载点全部已入库")
+        (T("配置中挂载点未入库: %s") % ",".join(miss)) if miss
+        else T("配置挂载点全部已入库"))
     # 11 agents_rules（AI 工作规则声明）
-    agents_p = os.path.expanduser(getattr(cfg, "AGENTS_PATH", "~/wg/AGENTS.md"))
+    agents_p = os.path.expanduser(getattr(cfg, "AGENTS_PATH", os.path.join(WG, "AGENTS.md")))
     add("agents_rules", "ok" if os.path.isfile(agents_p) else "warn",
-        "AGENTS.md 就位" if os.path.isfile(agents_p) else "缺少 ~/wg/AGENTS.md",
-        "声明式规则让所有 AI 工具读同一套边界" if os.path.isfile(agents_p)
-        else "建一份：raw 只读 / 先查重 / 留来源 / 冲突不覆盖")
+        T("AGENTS.md 就位") if os.path.isfile(agents_p) else T("缺少 %s/AGENTS.md") % WG,
+        T("声明式规则让所有 AI 工具读同一套边界") if os.path.isfile(agents_p)
+        else T("建一份：raw 只读 / 先查重 / 留来源 / 冲突不覆盖"))
 
     # 落库 + 报告
     for check, sev, summary, detail in results:
@@ -1715,22 +1808,22 @@ def cmd_audit(cfg, args):
     nfail = sum(1 for r in results if r[1] == "fail")
     nwarn = sum(1 for r in results if r[1] == "warn")
     ninfo = sum(1 for r in results if r[1] == "info")
-    lines = ["# omni 巡视报告 · %s" % time.strftime("%Y-%m-%d %H:%M"), "",
-             "**结论：%d 项需关注**（fail %d / warn %d / info %d）" %
+    lines = [T("# omni 巡视报告 · %s") % time.strftime("%Y-%m-%d %H:%M"), "",
+             T("**结论：%d 项需关注**（fail %d / warn %d / info %d）") %
              (nfail + nwarn, nfail, nwarn, ninfo), ""]
     if nfail or nwarn:
-        lines += ["## ❗ 需关注"]
+        lines += [T("## ❗ 需关注")]
         for check, sev, summary, detail in results:
             if sev in ("fail", "warn"):
                 lines.append("- **[%s] %s**" % (sev, summary))
                 if detail:
                     lines.append("  ↳ %s" % detail)
         lines.append("")
-    lines += ["## ✅ 正常"]
+    lines += [T("## ✅ 正常")]
     for check, sev, summary, detail in results:
         if sev == "ok":
             lines.append("- %s %s" % (summary, ("↳ " + detail) if detail else ""))
-    lines += ["", "## ℹ️ 提示"]
+    lines += ["", T("## ℹ️ 提示")]
     for check, sev, summary, detail in results:
         if sev == "info":
             lines.append("- %s %s" % (summary, ("↳ " + detail) if detail else ""))
@@ -1740,7 +1833,7 @@ def cmd_audit(cfg, args):
     out = os.path.join(rp, "daily-%s.md" % time.strftime("%Y-%m-%d"))
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    print("报告: %s" % out)
+    print(T("报告: %s") % out)
     for check, sev, summary, detail in results:
         print("  [%-4s] %s" % (sev, summary))
     git_auto_commit(cfg, "audit %s: fail=%d warn=%d" % (time.strftime("%Y-%m-%d %H:%M"), nfail, nwarn))
@@ -1754,7 +1847,7 @@ def cmd_audit(cfg, args):
                  (r[1] == "warn" and r[2] not in seen)]
         if fresh:
             push_wecom(cfg.AUDIT["webhook_wecom"],
-                       "omni 巡视：%s" % "；".join(r[2] for r in fresh))
+                       T("omni 巡视：%s") % "；".join(r[2] for r in fresh))
     return 3 if nfail else (1 if nwarn else 0)
 
 def push_wecom(url, text):
@@ -1771,7 +1864,7 @@ def push_wecom(url, text):
 def cmd_report(cfg, args):
     rp = os.path.expanduser(cfg.REPORT_DIR)
     if not os.path.isdir(rp):
-        print("（还没有报告，先跑 omni audit）"); return 1
+        print(T("（还没有报告，先跑 omni audit）")); return 1
     files = sorted(os.listdir(rp))[-args.days:]
     for fn in files:
         print(os.path.join(rp, fn))
@@ -1791,17 +1884,17 @@ def cmd_db(cfg, args):
         for t in ("files", "kb_items", "push_log", "audits", "assets"):
             try:
                 n = conn.execute("SELECT count(*) FROM %s" % t).fetchone()[0]
-                print("%-10s %d 行" % (t, n))
+                print(T("%-10s %d 行") % (t, n))
             except sqlite3.OperationalError:
                 pass
         return 0
     if args.action == "vacuum":
         conn.execute("VACUUM")
-        print("vacuum 完成")
+        print(T("vacuum 完成"))
         return 0
     if args.action == "rebuild":
         if not args.yes:
-            print("rebuild 会删除索引缓存并重扫（不影响用户文件）。确认请加 --yes")
+            print(T("rebuild 会删除索引缓存并重扫（不影响用户文件）。确认请加 --yes"))
             return 2
         dbp = os.path.expanduser(cfg.DB_PATH)
         conn.close()
@@ -1809,104 +1902,126 @@ def cmd_db(cfg, args):
             p = dbp + suffix
             if os.path.exists(p):
                 os.remove(p)
-        print("已删除索引缓存。重跑: omni index --bg --full")
+        print(T("已删除索引缓存。重跑: omni index --bg --full"))
         return 0
     return 2
 
 # ============================================================ main
+def _prescan_lang(argv):
+    """在建 argparse 之前先扫 --lang，保证 --help 也是对应语言。"""
+    a = list(sys.argv[1:] if argv is None else argv)
+    for i, t in enumerate(a):
+        if t == "--lang" and i + 1 < len(a):
+            return a[i + 1]
+        if t.startswith("--lang="):
+            return t.split("=", 1)[1]
+    return os.environ.get("OMNI_LANG", "")
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="omni", description=__doc__)
+    set_lang(_prescan_lang(argv))
+    ap = argparse.ArgumentParser(
+        prog="omni",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="\n\n".join([
+            T("omni — 本地索引与编目工具（stdlib only，Python 3.9+）"),
+            T("用法: omni <command> [options]      omni --help"),
+            T("安全硬约束 S1：omni 绝不删/移/改用户文件，只写 $OMNI_HOME/{inventory,reports,wiki,.omni}/ 与 omni.db。"),
+            T("save 收集箱只往 wiki/raw 写副本（源文件永远只读）；清理建议只输出命令、不代执行；破坏性命令（db rebuild）必须 --yes。"),
+            T("语言: --lang en|zh  或 环境变量 OMNI_LANG / LANG（默认按系统 locale，回落 en）"),
+        ]),
+    )
     ap.add_argument("--version", action="version", version="omni " + VERSION)
+    ap.add_argument("--lang", metavar="CODE", help=T("输出语言: en / zh（放在子命令之前）"))
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("doctor", help="自检：配置/挂载/DB/解释器/依赖")
+    p = sub.add_parser("doctor", help=T("自检：配置/挂载/DB/解释器/依赖"))
     p.set_defaults(func=cmd_doctor, json=False)
 
-    p = sub.add_parser("mounts", help="列出挂载点 + 状态 + 上次扫描")
+    p = sub.add_parser("mounts", help=T("列出挂载点 + 状态 + 上次扫描"))
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_mounts)
 
-    p = sub.add_parser("selftest", help="核心逻辑自测")
+    p = sub.add_parser("selftest", help=T("核心逻辑自测"))
     p.set_defaults(func=cmd_selftest)
 
-    p = sub.add_parser("index", help="建索引（默认增量；首次自动全量）")
-    p.add_argument("--full", action="store_true", help="全量重扫")
-    p.add_argument("--content", action="store_true", help="内容索引（白名单挂载点）")
-    p.add_argument("--limit", type=int, default=None, help="内容索引每挂载点上限")
-    p.add_argument("--status", action="store_true", help="看进度")
-    p.add_argument("--bg", action="store_true", help="后台运行")
+    p = sub.add_parser("index", help=T("建索引（默认增量；首次自动全量）"))
+    p.add_argument("--full", action="store_true", help=T("全量重扫"))
+    p.add_argument("--content", action="store_true", help=T("内容索引（白名单挂载点）"))
+    p.add_argument("--limit", type=int, default=None, help=T("内容索引每挂载点上限"))
+    p.add_argument("--status", action="store_true", help=T("看进度"))
+    p.add_argument("--bg", action="store_true", help=T("后台运行"))
     p.add_argument("--foreground", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("mounts", nargs="*", help="只处理指定挂载点")
+    p.add_argument("mounts", nargs="*", help=T("只处理指定挂载点"))
     p.set_defaults(func=cmd_index)
 
-    p = sub.add_parser("find", help="检索（≥3 字走全文，≤2 字走文件名）")
+    p = sub.add_parser("find", help=T("检索（≥3 字走全文，≤2 字走文件名）"))
     p.add_argument("query")
     p.add_argument("--mount", nargs="*")
     p.add_argument("--ext", nargs="*")
-    p.add_argument("--recent", help="如 7d / 24h")
+    p.add_argument("--recent", help=T("如 7d / 24h"))
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--json", action="store_true")
-    p.add_argument("--pack", action="store_true", help="结果打包成 md，供 AI 会话当上下文")
+    p.add_argument("--pack", action="store_true", help=T("结果打包成 md，供 AI 会话当上下文"))
     p.set_defaults(func=cmd_find)
 
-    p = sub.add_parser("save", help="收集箱：网页/文件存入 wiki/raw（源只读）")
+    p = sub.add_parser("save", help=T("收集箱：网页/文件存入 wiki/raw（源只读）"))
     p.add_argument("src", nargs="?")
     p.add_argument("extra", nargs="?", help=argparse.SUPPRESS)
     p.add_argument("--title")
     p.add_argument("--list", action="store_true")
     p.set_defaults(func=cmd_save)
 
-    p = sub.add_parser("git", help="知识层版本：log/status/commit（audit 后自动提交）")
+    p = sub.add_parser("git", help=T("知识层版本：log/status/commit（audit 后自动提交）"))
     p.add_argument("action", nargs="?", default="log", choices=["log", "status", "commit"])
     p.set_defaults(func=cmd_git)
 
-    p = sub.add_parser("ima", help="ima 官方 OpenAPI 直连：list/ls/pull/push")
+    p = sub.add_parser("ima", help=T("ima 官方 OpenAPI 直连：list/ls/pull/push"))
     p.add_argument("action", choices=["setup", "list", "ls", "pull", "push"])
     p.add_argument("file", nargs="?")
-    p.add_argument("--kb", help="知识库名称或 ID")
-    p.add_argument("--note", action="store_true", help="强制走笔记通道（md/txt 免 COS 依赖）")
+    p.add_argument("--kb", help=T("知识库名称或 ID"))
+    p.add_argument("--note", action="store_true", help=T("强制走笔记通道（md/txt 免 COS 依赖）"))
     p.set_defaults(func=cmd_ima)
 
-    p = sub.add_parser("recent", help="最近变动")
+    p = sub.add_parser("recent", help=T("最近变动"))
     p.add_argument("span", nargs="?", default="7d")
     p.add_argument("--limit", type=int, default=100)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_recent)
 
-    p = sub.add_parser("du", help="占用排行（按一级目录）")
+    p = sub.add_parser("du", help=T("占用排行（按一级目录）"))
     p.add_argument("--top", type=int, default=20)
     p.set_defaults(func=cmd_du)
 
-    p = sub.add_parser("open", help="Finder 打开 find 结果")
+    p = sub.add_parser("open", help=T("Finder 打开 find 结果"))
     p.add_argument("target")
     p.set_defaults(func=cmd_open)
 
-    p = sub.add_parser("inv", help="L1 资产卡片")
+    p = sub.add_parser("inv", help=T("L1 资产卡片"))
     p.add_argument("action", choices=["init", "sync", "stats", "list"])
     p.add_argument("--tag"); p.add_argument("--host"); p.add_argument("--health")
     p.add_argument("--stale")
     p.set_defaults(func=cmd_inv)
 
-    p = sub.add_parser("sync", help="L3 与 ima 双向")
+    p = sub.add_parser("sync", help=T("L3 与 ima 双向"))
     p.add_argument("action", choices=["push", "pull", "status", "mark"])
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--rule", type=int, default=None)
-    p.add_argument("--top", type=int, default=None, help="精选前 N 个候选（配合 --dry-run）")
+    p.add_argument("--top", type=int, default=None, help=T("精选前 N 个候选（配合 --dry-run）"))
     p.add_argument("file", nargs="?")
     p.add_argument("status2", nargs="?")
     p.set_defaults(func=cmd_sync)
 
-    p = sub.add_parser("audit", help="L4 主动巡视")
-    p.add_argument("--push", action="store_true", help="推企微（webhook 已配置时）")
+    p = sub.add_parser("audit", help=T("L4 主动巡视"))
+    p.add_argument("--push", action="store_true", help=T("推企微（webhook 已配置时）"))
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_audit)
 
-    p = sub.add_parser("report", help="列出/打开巡视报告")
+    p = sub.add_parser("report", help=T("列出/打开巡视报告"))
     p.add_argument("--days", type=int, default=7)
     p.add_argument("--open", action="store_true")
     p.set_defaults(func=cmd_report)
 
-    p = sub.add_parser("db", help="数据库维护")
+    p = sub.add_parser("db", help=T("数据库维护"))
     p.add_argument("action", choices=["stats", "vacuum", "rebuild"])
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=cmd_db)
@@ -1922,19 +2037,19 @@ def main(argv=None):
 def index_status():
     st = read_state("scan-state.json", {})
     if not st:
-        print("（还没有扫描状态 —— 跑 omni index --bg）")
+        print(T("（还没有扫描状态 —— 跑 omni index --bg）"))
         return 0
-    print("%-16s %-6s %8s %10s  %s" % ("挂载点", "完成", "条数", "耗时", "时间"))
+    print("%-16s %-6s %8s %10s  %s" % (T("挂载点"), T("完成"), T("条数"), T("耗时"), T("时间")))
     for label, s in sorted(st.items()):
         print("%-16s %-6s %8s %10.1fs  %s" % (
-            label, "是" if s.get("done") else "否",
+            label, T("是") if s.get("done") else T("否"),
             s.get("count", s.get("content", 0)), s.get("elapsed", 0),
             age_h(s.get("at"))))
     lock = state_file("index.lock")
     if os.path.exists(lock):
-        print("\n状态: 扫描进行中（pid %s）" % open(lock).read().strip())
+        print(T("\n状态: 扫描进行中（pid %s）") % open(lock).read().strip())
     else:
-        print("\n状态: 空闲")
+        print(T("\n状态: 空闲"))
     return 0
 
 if __name__ == "__main__":
