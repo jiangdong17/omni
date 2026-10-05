@@ -134,7 +134,7 @@ git clone https://github.com/jiangdong17/omni.git ~/wg
 cd ~/wg
 
 # Option 2: offline tarball (copy the tar.gz to the target machine)
-tar -xzf omni-v1.1.0.tar.gz
+tar -xzf omni-v1.2.0.tar.gz
 mv omni-repo ~/wg && cd ~/wg
 
 chmod +x omni.sh
@@ -177,7 +177,7 @@ echo 'export PATH="$HOME/wg:$PATH"' >> ~/.zshrc && exec zsh
 Verify:
 
 ```sh
-omni --version      # → omni 1.1.0
+omni --version      # → omni 1.2.0
 ```
 
 ### 2.6 First self-check

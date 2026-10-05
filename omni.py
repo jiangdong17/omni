@@ -12,7 +12,7 @@ import argparse, hashlib, json, os, re, signal, socket, sqlite3, subprocess, sys
 import zipfile
 from fnmatch import fnmatch
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 WG = os.path.expanduser(os.environ.get("OMNI_HOME", "~/wg"))
 
 # ============================================================ i18n（多语言）
