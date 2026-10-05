@@ -209,7 +209,7 @@ def cmd_doctor(cfg, args):
         for m in mounts:
             if not is_mounted(m["mountpoint"]):
                 print("  ⚠ 未挂载: %s (%s)" % (m["label"], m["mountpoint"]))
-        print("  修复: sh ~/wg/smb.sh mount all")
+        print("  修复: 挂载该共享后重跑（见 INSTALL.md 第 4 节）")
     else:
         ok += 1
     # DB
@@ -1577,7 +1577,7 @@ def cmd_audit(cfg, args):
     add("mounts", "fail" if missing else "ok",
         ("%d / %d，缺: %s" % (n_ok, len(mounts), ",".join(missing))) if missing
         else "%d / %d 完整" % (n_ok, len(mounts)),
-        "修复: sh ~/wg/smb.sh mount all" if missing else "")
+        "修复: 挂载缺失共享后重跑（见 INSTALL.md 第 4 节）" if missing else "")
     # 3 disk（★ 主机不可达的挂载点跳过：死挂载点的 statvfs 会不可中断卡死）
     dead = dead_hosts(cfg)
     dead_mps = [os.path.abspath(m["mountpoint"]) for m in mounts if mount_is_dead(m, dead)]

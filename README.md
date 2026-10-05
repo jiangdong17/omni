@@ -36,6 +36,9 @@ omni 用**一个 SQLite 文件**装下全部索引（FTS5 全文），提供统�
 
 ## 安装
 
+> 📖 **要装多台电脑？请看 [INSTALL.md](INSTALL.md)** —— 完整的中文说明书：环境检查、
+> 共享挂载（SMB/NFS/本地盘）、多机 `MOUNTS` 配置、定时自动化、故障排查。本节只是快速上手。
+
 要求：Python 3.9+（建议 3.10+，SQLite 需要启用 FTS5 —— macOS 自带与官方发行版均满足）。
 
 ```sh
@@ -120,6 +123,7 @@ omni find 关键词
 ├── omni.py            # 主程序（单文件）
 ├── omnirc.py          # 配置（唯一真源）
 ├── omni.sh            # 入口脚本
+├── INSTALL.md         # ★ 安装与多机配置说明书
 ├── omni.db            # SQLite 索引（唯一数据文件）
 ├── inventory/         # L1 资产卡片
 ├── reports/           # 巡视报告
